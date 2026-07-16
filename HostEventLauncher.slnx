@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="HostEventLauncher.Sharp/HostEventLauncher.Sharp.csproj" />
+  <Project Path="HostEventLauncher.Sharp.Tests/HostEventLauncher.Sharp.Tests.csproj" />
+  <Project Path="HostEventLauncher.Runner/HostEventLauncher.Runner.csproj" />
+</Solution>
