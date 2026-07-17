@@ -11,4 +11,10 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="HostEventLauncher.Runner" />
+    <InternalsVisibleTo Include="HostEventLauncher.Sharp.Tests" />
+    <InternalsVisibleTo Include="Start" />
+  </ItemGroup>
+
 </Project>

@@ -20,6 +20,8 @@ internal static class NativeConsole
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    public static bool HasConsoleWindow() => GetConsoleWindow() != IntPtr.Zero;
+
     public static bool TryAllocate()
     {
         if (GetConsoleWindow() != IntPtr.Zero)

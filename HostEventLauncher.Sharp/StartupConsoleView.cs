@@ -1,10 +1,10 @@
-using HostEventLauncher.Sharp.Milestones;
+using HostEventLauncher.Sharp.Progress;
 using System.Runtime.InteropServices;
 using System.Text;
 
 namespace HostEventLauncher.Sharp;
 
-public sealed partial class HostEventConsole : IDisposable
+internal sealed partial class StartupConsoleView : IDisposable
 {
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -13,7 +13,7 @@ public sealed partial class HostEventConsole : IDisposable
     [LibraryImport("kernel32.dll")]
     private static partial uint GetConsoleOutputCP();
 
-    public event Action? OnLastMilestoneReached;
+    public event Action? OnProgressComplete;
 
     private readonly Lock _sync = new();
     private readonly bool _supportsCursorPositioning = !Console.IsOutputRedirected;
@@ -24,18 +24,18 @@ public sealed partial class HostEventConsole : IDisposable
     private int _spinnerColumn = 1;
     private int _nextRow;
     private bool _cursorHidden;
-    private readonly NestedMilestoneProgressTracker _progressTracker = new();
-    private MilestoneProgressSnapshot _progress;
-    private bool _lastMilestoneSignaled;
+    private readonly NestedProgressTracker _progressTracker = new();
+    private ProgressSnapshot _progress;
+    private bool _completionSignaled;
 
-    public HostEventConsole()
+    public StartupConsoleView()
     {
         var unicodeSpinnerEnabled = TryEnableUnicodeSpinner();
         _spinner = new DotsSpinner(unicodeSpinnerEnabled);
         _nextRow = SafeCursorTop();
     }
 
-    public void WriteMessage(string text)
+    public void WriteLine(string text)
     {
         StopSpinner();
 
@@ -64,37 +64,37 @@ public sealed partial class HostEventConsole : IDisposable
             _spinnerRow = row;
             _nextRow = SafeCursorTop();
 
-            if (_progress.RootMilestoneCount > 0)
+            if (_progress.RootStepCount > 0)
             {
                 DrawProgressBarLocked();
             }
         }
     }
 
-    public void SetMilestoneTotal(int total)
+    public void SetProgressTotal(int totalSteps)
     {
         lock (_sync)
         {
-            _progress = _progressTracker.SetNumberOfMilestones(total);
+            _progress = _progressTracker.BeginProgress(totalSteps);
             if (_progress.ActiveDepth == 1)
             {
-                _lastMilestoneSignaled = false;
+                _completionSignaled = false;
             }
 
-            if (total <= 0 || _spinnerRow < 0 || !_supportsCursorPositioning) return;
+            if (totalSteps <= 0 || _spinnerRow < 0 || !_supportsCursorPositioning) return;
             DrawProgressBarLocked();
             RestoreOutputCursorLocked();
         }
     }
 
-    public void AdvanceMilestone()
+    public void AdvanceStep()
     {
         bool completed;
 
         lock (_sync)
         {
-            _progress = _progressTracker.MilestoneReached();
-            completed = _progress.IsCompleted && !_lastMilestoneSignaled;
+            _progress = _progressTracker.CompleteStep();
+            completed = _progress.IsCompleted && !_completionSignaled;
 
             if (_spinnerRow >= 0 && _supportsCursorPositioning)
             {
@@ -104,13 +104,13 @@ public sealed partial class HostEventConsole : IDisposable
 
             if (completed)
             {
-                _lastMilestoneSignaled = true;
+                _completionSignaled = true;
             }
         }
 
         if (completed)
         {
-            OnLastMilestoneReached?.Invoke();
+            OnProgressComplete?.Invoke();
         }
     }
 
@@ -183,10 +183,7 @@ public sealed partial class HostEventConsole : IDisposable
         spinnerCts.Dispose();
     }
 
-    public void Dispose()
-    {
-        StopSpinner();
-    }
+    public void Dispose() => StopSpinner();
 
     private async Task SpinAsync(CancellationToken cancellationToken)
     {
@@ -241,7 +238,7 @@ public sealed partial class HostEventConsole : IDisposable
 
     private void DrawProgressBarLocked()
     {
-        if (_progress.RootMilestoneCount <= 0 || _spinnerRow < 0)
+        if (_progress.RootStepCount <= 0 || _spinnerRow < 0)
         {
             return;
         }
@@ -253,12 +250,12 @@ public sealed partial class HostEventConsole : IDisposable
         }
 
         var width = SafeWindowWidth();
-        var percent = (int)Math.Round(_progress.ProgressPercent, MidpointRounding.AwayFromZero);
+        var percent = (int)Math.Round(_progress.Percent, MidpointRounding.AwayFromZero);
         percent = Math.Clamp(percent, 0, 100);
         var label = $"{percent,3}%";
 
         var barWidth = Math.Max(10, width - label.Length - 2);
-        var filledWidth = (int)Math.Round(_progress.ProgressRatio * barWidth, MidpointRounding.AwayFromZero);
+        var filledWidth = (int)Math.Round(_progress.Ratio * barWidth, MidpointRounding.AwayFromZero);
         filledWidth = Math.Clamp(filledWidth, 0, barWidth);
         var emptyWidth = barWidth - filledWidth;
 
@@ -342,8 +339,7 @@ public sealed partial class HostEventConsole : IDisposable
 
     private static bool TryEnableUnicodeSpinner()
     {
-        var forceAscii = Environment.GetEnvironmentVariable("HOST_EVENT_LAUNCHER_ASCII_SPINNER")
-            ?? Environment.GetEnvironmentVariable("LAUNCHER_ASCII_SPINNER");
+        var forceAscii = Environment.GetEnvironmentVariable("HOST_EVENT_LAUNCHER_ASCII_SPINNER");
         if (string.Equals(forceAscii, "1", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(forceAscii, "true", StringComparison.OrdinalIgnoreCase))
         {

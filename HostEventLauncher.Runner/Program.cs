@@ -3,133 +3,133 @@ using System.IO.Pipes;
 using System.Text;
 using HostEventLauncher.Sharp;
 
-using var console = new HostEventConsole();
+using var view = new StartupConsoleView();
 using var shutdownCts = new CancellationTokenSource();
-console.OnLastMilestoneReached += () =>
+view.OnProgressComplete += () =>
 {
-    WriteConsole("Application loaded, shutting down logger");
+    WriteLine("Startup complete, closing console.");
     shutdownCts.Cancel();
 };
-WriteConsole("Host event launcher ready.");
+WriteLine("HostEventLauncher.Runner ready.");
 
 var clientPath = ResolveClientPath(args);
 if (clientPath is null)
 {
-    WriteConsole("Client executable not found. Pass the path as the first argument or place it in binaries/.");
+    WriteLine("Client executable not found. Pass the path as the first argument or place it in binaries/client.exe.");
     return 1;
 }
 
 var clientDirectory = Path.GetDirectoryName(clientPath)!;
-var pipeName = $"host-event-launcher-{Environment.ProcessId}-{Guid.NewGuid():N}";
-WriteConsole($"opening pipe '{pipeName}'.");
+var attachName = $"host-event-launcher-{Environment.ProcessId}-{Guid.NewGuid():N}";
+WriteLine($"waiting for attach on '{attachName}'.");
 
-await using var pipeServer = new NamedPipeServerStream(
-    pipeName,
+await using var attachChannel = new NamedPipeServerStream(
+    attachName,
     PipeDirection.In,
     1,
     PipeTransmissionMode.Byte,
     PipeOptions.Asynchronous);
 
-var startInfo = CreateClientStartInfo(clientPath, clientDirectory, pipeName);
+var startInfo = CreateClientStartInfo(clientPath, clientDirectory, attachName);
 
-WriteConsole("starting client...");
+WriteLine("starting client...");
 using var clientProcess = Process.Start(startInfo);
 if (clientProcess is null)
 {
-    WriteConsole("Client process could not be started.");
+    WriteLine("Client process could not be started.");
     return 1;
 }
 
-WriteConsole("waiting for client pipe connection...");
-console.StartSpinner();
+WriteLine("waiting for client attach...");
+view.StartSpinner();
 
 try
 {
-    await pipeServer.WaitForConnectionAsync();
+    await attachChannel.WaitForConnectionAsync();
 }
 catch (Exception ex)
 {
-    console.StopSpinner();
-    WriteConsole($"pipe connection failed: {ex.Message}");
+    view.StopSpinner();
+    WriteLine($"attach failed: {ex.Message}");
     return 1;
 }
 
-console.StopSpinner();
-WriteConsole("Client connected to pipe.");
+view.StopSpinner();
+WriteLine("client attached.");
 
-using var reader = new StreamReader(pipeServer, Encoding.UTF8, leaveOpen: true);
+using var reader = new StreamReader(attachChannel, Encoding.UTF8, leaveOpen: true);
 try
 {
     while (true)
     {
-        console.StartSpinner();
+        view.StartSpinner();
         var line = await reader.ReadLineAsync(shutdownCts.Token);
-        console.StopSpinner();
+        view.StopSpinner();
 
         if (line is null)
         {
-            WriteConsole(DescribePipeClosure(clientProcess));
+            WriteLine(DescribeDetach(clientProcess));
             break;
         }
 
-        if (!HostEventPipeMessage.TryParse(line, out var message))
+        if (!StartupWireMessage.TryParse(line, out var message))
         {
-            WriteConsole($"unrecognized payload: {line}");
+            WriteLine($"unrecognized payload: {line}");
             continue;
         }
 
-        if (message.MessageType.Equals("control", StringComparison.OrdinalIgnoreCase) &&
-            message.Text.Equals("kill", StringComparison.OrdinalIgnoreCase))
+        if (message.Kind.Equals("control", StringComparison.OrdinalIgnoreCase) &&
+            message.Payload.Equals("close", StringComparison.OrdinalIgnoreCase))
         {
-            WriteConsole("Exiting.");
+            WriteLine("client closed session.");
             break;
         }
 
-        if (message.MessageType.Equals("progress", StringComparison.OrdinalIgnoreCase))
+        if (message.Kind.Equals("progress", StringComparison.OrdinalIgnoreCase))
         {
-            if (int.TryParse(message.Text, out var total) && total >= 1)
+            if (int.TryParse(message.Payload, out var totalSteps) && totalSteps >= 1)
             {
-                console.SetMilestoneTotal(total);
+                view.SetProgressTotal(totalSteps);
             }
-            else if (message.Text.Equals("reached", StringComparison.OrdinalIgnoreCase))
+            else if (message.Payload.Equals("step", StringComparison.OrdinalIgnoreCase))
             {
-                console.AdvanceMilestone();
+                view.AdvanceStep();
             }
 
             continue;
         }
 
-        if (message.MessageType.Equals("log", StringComparison.OrdinalIgnoreCase))
+        if (message.Kind.Equals("log", StringComparison.OrdinalIgnoreCase))
         {
-            WriteConsole(message.Text);
+            WriteLine(message.Payload);
         }
     }
 }
 catch (OperationCanceledException)
 {
-    console.StopSpinner();
+    view.StopSpinner();
     return 0;
 }
 catch (Exception ex)
 {
-    console.StopSpinner();
-    WriteConsole($"Error while reading from pipe: {ex.Message}");
+    view.StopSpinner();
+    WriteLine($"error while reading attach channel: {ex.Message}");
     return -1;
 }
 
-WriteConsole("runner exiting.");
+WriteLine("runner exiting.");
 return 0;
 
-void WriteConsole(string text) => console.WriteMessage(text);
+void WriteLine(string text) => view.WriteLine(text);
 
-static string DescribePipeClosure(Process clientProcess)
+static string DescribeDetach(Process clientProcess)
 {
     if (clientProcess.HasExited)
     {
-        return $"pipe closed; client exited with code {clientProcess.ExitCode}.";
+        return $"attach channel closed; client exited with code {clientProcess.ExitCode}.";
     }
 
-    return "pipe closed; client is still running.";
+    return "attach channel closed; client is still running.";
 }
 
 static string? ResolveClientPath(string[] args)
@@ -139,13 +139,7 @@ static string? ResolveClientPath(string[] args)
         return Path.GetFullPath(args[0]);
     }
 
-    var candidateDirectories = new[]
-    {
-        AppContext.BaseDirectory,
-        Environment.CurrentDirectory
-    };
-
-    foreach (var directory in candidateDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
+    foreach (var directory in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory }.Distinct(StringComparer.OrdinalIgnoreCase))
     {
         var candidate = Path.Combine(directory, "binaries", "client.exe");
         if (File.Exists(candidate))
@@ -157,7 +151,7 @@ static string? ResolveClientPath(string[] args)
     return null;
 }
 
-static ProcessStartInfo CreateClientStartInfo(string clientPath, string clientDirectory, string pipeName)
+static ProcessStartInfo CreateClientStartInfo(string clientPath, string clientDirectory, string attachName)
 {
     return new ProcessStartInfo(clientPath)
     {
@@ -165,8 +159,7 @@ static ProcessStartInfo CreateClientStartInfo(string clientPath, string clientDi
         WorkingDirectory = clientDirectory,
         Environment =
         {
-            [global::HostEventLauncher.Sharp.HostEventLauncher.PipeEnvironmentVariable] = pipeName,
-            [global::HostEventLauncher.Sharp.HostEventLauncher.LegacyPipeEnvironmentVariable] = pipeName
+            [Startup.RemoteAttachVariable] = attachName
         }
     };
 }

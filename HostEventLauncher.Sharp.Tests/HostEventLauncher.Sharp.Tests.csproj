@@ -17,4 +17,10 @@
     <ProjectReference Include="..\HostEventLauncher.Sharp\HostEventLauncher.Sharp.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Remove="NativeConsoleProbe\**" />
+    <None Remove="NativeConsoleProbe\**" />
+    <EmbeddedResource Remove="NativeConsoleProbe\**" />
+  </ItemGroup>
+
 </Project>
